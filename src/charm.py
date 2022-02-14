@@ -4,7 +4,6 @@ import logging
 import secrets
 
 from ops.charm import CharmBase
-from ops.framework import StoredState
 from ops.pebble import PathError, ProtocolError
 
 from ops.main import main
@@ -33,12 +32,9 @@ class MongoDBCharm(CharmBase):
     - Reconfigure replica set anytime number of MongoDB units changes
     - Provides a database relation for any MongoDB client
     """
-    _stored = StoredState()
 
     def __init__(self, *args):
         super().__init__(*args)
-
-        self._stored.set_default(mongodb_initialized=False)
 
         self.port = MONGODB_PORT
 
@@ -49,15 +45,17 @@ class MongoDBCharm(CharmBase):
         self.framework.observe(self.on.stop, self._on_stop)
         self.framework.observe(self.on.update_status, self._on_update_status)
 
+        self.framework.observe(self.on[PEER].relation_created,
+                               self._initialize_peers)
         self.framework.observe(self.on[PEER].relation_changed,
                                self._reconfigure)
         self.framework.observe(self.on[PEER].relation_departed,
                                self._reconfigure)
 
-        self.framework.observe(self.on.leader_elected,
-                               self._on_leader_elected)
+        # self.framework.observe(self.on.leader_elected,
+        #                       self._initialize_peers)
 
-        if self._stored.mongodb_initialized and self.mongo.version:
+        if self.mongodb_initialized and self.mongo.version:
             self.mongo_provider = MongoProvider(self, 'database')
         else:
             logger.debug("Mongo Provider not yet Available")
@@ -74,6 +72,10 @@ class MongoDBCharm(CharmBase):
         different from the current specification.
         """
         logger.debug("Running config changed handler")
+
+        if not self.peers:
+            return
+
         container = self.unit.get_container("mongodb")
 
         if not container.can_connect():
@@ -119,7 +121,7 @@ class MongoDBCharm(CharmBase):
             event.defer()
             return
 
-        if not self._stored.mongodb_initialized:
+        if not self.mongodb_initialized:
             self.unit.status = WaitingStatus("Initializing MongoDB")
             try:
                 logger.debug(
@@ -127,7 +129,7 @@ class MongoDBCharm(CharmBase):
                     self.mongo.cluster_hosts
                 )
                 self.mongo.initialize_replica_set(self.mongo.cluster_hosts)
-                self._stored.mongodb_initialized = True
+                self.peers.data[self.app]["mongodb_initialized"] = json.dumps(True)
                 self.peers.data[self.app][
                     "replica_set_hosts"] = json.dumps(self.mongo.cluster_hosts)
 
@@ -172,7 +174,7 @@ class MongoDBCharm(CharmBase):
                 self.restart()
             return
 
-        if not self._stored.mongodb_initialized:
+        if not self.mongodb_initialized:
             status_message = "mongodb not initialized"
             self.unit.status = WaitingStatus(status_message)
             return
@@ -210,22 +212,31 @@ class MongoDBCharm(CharmBase):
         self._on_update_status(event)
         logger.debug("Running reconfigure finished")
 
-    def _on_leader_elected(self, event):
-        """Assume leadership.
+    def _initialize_peers(self, event):
+        """Initialize peer relation data.
 
-        Each new leader checks if root password and the security key
-        is available in peer relation data. If not the leader sets
-        these into peer relation data.
+        Each leader checks if root password and the security key
+        is available in peer relation data. If not, the leader sets
+        these into peer relation data. Also the first time
+        a leader gets a peer relation created event MongoDB
+        replica set would not have been intialized. Hence the status
+        of MongoDB replica set initialization is set to false.
         """
-        data = self.peers.data[self.app]
+        if not self.unit.is_leader():
+            return
 
-        root_password = data.get('root_password', None)
-        if root_password is None:
-            self.peers.data[self.app]['root_password'] = str(self.root_password)
+        data = event.relation.data[self.app]
 
-        security_key = data.get('security_key', None)
-        if security_key is None:
-            self.peers.data[self.app]['security_key'] = str(self.security_key)
+        if not data.get("mongodb_initialized", False):
+            data["mongodb_initialized"] = json.dumps(False)
+
+        if not data.get("root_password"):
+            root_password = str(self.root_password)
+            self.peers.data[self.app]['root_password'] = root_password
+
+        if not data.get("security_key"):
+            security_key = str(self.security_key)
+            self.peers.data[self.app]['security_key'] = security_key
 
     ##############################################
     #               PROPERTIES                   #
@@ -312,6 +323,21 @@ class MongoDBCharm(CharmBase):
         """
         return self.model.get_relation(PEER)
 
+    @property
+    def mongodb_initialized(self):
+        if not self.peers:
+            return False
+
+        try:
+            peer_data = self.peers.data[self.app]
+        except AttributeError:
+            return False
+
+        has_intialized = json.loads(peer_data.get("mongodb_initialized", "false"))
+
+        return has_intialized
+
+    @property
     def replica_set_hosts(self):
         """Fetch current list of hosts in the replica set.
 
