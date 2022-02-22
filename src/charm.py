@@ -328,6 +328,9 @@ class MongoDBCharm(CharmBase):
         if not self.peers:
             return False
 
+        if self.mongo.is_initialized():
+            return True
+
         try:
             peer_data = self.peers.data[self.app]
         except AttributeError:

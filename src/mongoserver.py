@@ -82,6 +82,18 @@ class MongoDB():
             client.close()
         return ready
 
+    def is_initialized(self, host=None):
+        """Is the MongoDB replica set initialized."""
+        client = self.client(host)
+
+        try:
+            rs_status = client.admin.command({'replSetGetStatus': 1})
+            logger.debug("Replicaset status is : %s", rs_status)
+        except ServerSelectionTimeoutError:
+            return False
+
+        return rs_status
+
     def reconfigure_replica_set(self, hosts: list):
         """Reconfigure the MongoDB replica set.
 
