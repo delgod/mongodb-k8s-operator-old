@@ -89,7 +89,7 @@ class MongoDB():
         try:
             rs_status = client.admin.command({'replSetGetStatus': 1})
             logger.debug("Replicaset status is : %s", rs_status)
-        except ServerSelectionTimeoutError:
+        except (OperationFailure, ServerSelectionTimeoutError):
             return False
 
         return rs_status

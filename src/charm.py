@@ -329,6 +329,8 @@ class MongoDBCharm(CharmBase):
             return False
 
         if self.mongo.is_initialized():
+            if self.unit.is_leader():
+                self.peers.data[self.app]["mongodb_initialized"] = json.dumps(True)
             return True
 
         try:
