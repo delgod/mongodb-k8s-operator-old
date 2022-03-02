@@ -77,6 +77,10 @@ class MongoDBCharm(CharmBase):
             logger.debug("Peer relation does not exist, not starting mongodb")
             return
 
+        if not self.leader_has_set_credentials() and not self.unit.is_leader():
+            self.unit.status = WaitingStatus("Waiting for leader")
+            return
+
         container = self.unit.get_container("mongodb")
 
         if not container.can_connect():
@@ -129,10 +133,11 @@ class MongoDBCharm(CharmBase):
                     "Attempting replica set initialization : %s",
                     self.mongo.cluster_hosts
                 )
-                self.mongo.initialize_replica_set(self.mongo.cluster_hosts)
+                unit_id = self.model.unit.name.split("/")[1]
+                self.mongo.initialize_replica_set(unit_id)
                 self.peers.data[self.app]["mongodb_initialized"] = json.dumps(True)
                 self.peers.data[self.app][
-                    "replica_set_hosts"] = json.dumps(self.mongo.cluster_hosts)
+                    "replica_set_hosts"] = json.dumps(list(self.mongo.hostname(unit_id)))
 
                 # Now that we've initialized MongoDB, we can finally set the necessary
                 # relation data for the relations that were already created.
@@ -192,14 +197,13 @@ class MongoDBCharm(CharmBase):
 
         The number of replicas in the MongoDB replica set is updated.
         """
-        logger.debug("Running reconfigure")
-
         if not self.unit.is_leader():
             self._on_update_status(event)
             return
 
         if self.need_replica_set_reconfiguration:
             try:
+                logger.debug("Reconfiguring replica set")
                 self.mongo.reconfigure_replica_set(self.mongo.cluster_hosts)
                 # since a new replica set has been configured,
                 # now update the set of replica set hosts
@@ -211,7 +215,6 @@ class MongoDBCharm(CharmBase):
                 event.defer()
 
         self._on_update_status(event)
-        logger.debug("Running reconfigure finished")
 
     def _on_leader_elected(self, event):
         """Assume leadership.
@@ -229,6 +232,9 @@ class MongoDBCharm(CharmBase):
         security_key = data.get('security_key', None)
         if security_key is None:
             self.peers.data[self.app]['security_key'] = str(self.security_key)
+
+        if self.mongodb_initialized and self.need_replica_set_reconfiguration:
+            self._reconfigure(event)
 
     def _initialize_peers(self, event):
         """Initialize peer relation data.
@@ -258,7 +264,9 @@ class MongoDBCharm(CharmBase):
     def num_peers(self):
         """Find number of deployed MongoDB units.
         """
-        return len(self.peers.units) + 1 if self.peers else 1
+        # FIXME len(self.peers.units) + 1 if self.peers else 1
+        logger.debug("PLANNED: %s", self.model.app.planned_units())
+        return self.model.app.planned_units()
 
     @property
     def mongo(self):
@@ -358,6 +366,25 @@ class MongoDBCharm(CharmBase):
         self.mongo.shutdown()
         container = self.unit.get_container("mongodb")
         container.restart("mongodb")
+
+    def leader_has_set_credentials(self):
+        if not self.peers:
+            return False
+
+        try:
+            data = self.peers.data[self.app]
+        except AttributeError:
+            return False
+
+        root_password = data.get('root_password')
+        if root_password is None:
+            return False
+
+        security_key = data.get('security_key')
+        if security_key is None:
+            return False
+
+        return True
 
     def have_security_key(self, container):
         """Has the security key been uploaded to a workload container.

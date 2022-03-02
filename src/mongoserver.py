@@ -108,6 +108,7 @@ class MongoDB():
                 {"_id": i, "host": h} for i, h in enumerate(hosts)
             ]
             rs_config["config"]["version"] += 1
+            logger.debug("Reconfiguring replica set : %s", rs_config)
             replica_set_client.admin.command(
                 "replSetReconfig", rs_config["config"], force=True
             )
@@ -117,7 +118,7 @@ class MongoDB():
         finally:
             replica_set_client.close()
 
-    def initialize_replica_set(self, hosts: list):
+    def initialize_replica_set(self, unit_id):
         """Initialize the MongoDB replica set.
 
         Args:
@@ -125,7 +126,7 @@ class MongoDB():
         """
         config = {
             "_id": self.replica_set_name,
-            "members": [{"_id": i, "host": h} for i, h in enumerate(hosts)],
+            "members": [{"_id": 0, "host": self.hostname(unit_id)}],
         }
 
         # The mongo client used for initialization is constructed using a single node
@@ -133,6 +134,7 @@ class MongoDB():
         client = self.client("localhost")
 
         try:
+            logger.debug("Initializing replica set : %s", config)
             client.admin.command("replSetInitiate", config)
         except Exception as e:
             logger.error("cannot initialize replica set. error={}".format(e))
