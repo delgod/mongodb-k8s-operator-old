@@ -298,7 +298,7 @@ class MongoDBCharm(CharmBase):
         security_key = data.get('security_key', None)
 
         if security_key is None:
-            security_key = secrets.token_hex(128)
+            security_key = secrets.token_hex(512)
 
         return security_key
 
